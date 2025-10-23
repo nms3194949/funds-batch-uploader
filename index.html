@@ -1,285 +1,248 @@
 <!doctype html>
 <html lang="zh-Hant">
 <meta charset="utf-8">
-<title>更新基金績效（依代碼覆寫 & 自動上傳 Drive）</title>
-<body style="font-family: system-ui; background:#0b1020; color:#e6edf7; padding:20px">
-<h2>更新基金績效（依代碼覆寫 3m/6m/1Y/2Y/3Y/5Y；值>1 先 ÷100）</h2>
+<title>更新基金資料庫（依代碼覆寫）</title>
+<style>
+:root {
+  --deep: #0A1221;
+  --gold: #C9A227;
+  --gold-grad: linear-gradient(180deg, #EFD88A 0%, #C9A227 50%, #B8860B 100%);
+  --muted: #9fb1cc;
+  --error-bg: #401A1A;
+  --error-text: #FFDADA;
+}
+body { background: var(--deep); color: #EDEFF5; font-family: system-ui, "Noto Sans TC", sans-serif; padding: 24px; line-height: 1.6; }
+h2 { font-size: 26px; font-weight: 800; background: var(--gold-grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; }
+label { display:block; margin-top:12px; font-weight:600; color:var(--muted); }
+input, button, textarea { border-radius: 10px; border: 1px solid #22304a; background: #0f1626; color: #EDEFF5; }
+button { padding: 10px 18px; font-weight: 700; border: none; background: var(--gold-grad); color: #05122b; cursor: pointer; transition: 0.3s; box-shadow: 0 3px 6px rgba(0,0,0,.3); }
+button:hover { filter: brightness(1.1); transform: translateY(-1px); } button:active { transform: translateY(0); }
+#indicator { display:inline-block; margin-left:10px; font-size:20px; vertical-align:middle; }
+pre { white-space: pre-wrap; background:#111827; padding:12px; border-radius:8px; margin-top:16px; color:#B2F5EA; font-size:13px; }
+#errorList { margin-top:16px; background:var(--error-bg); color:var(--error-text); padding:12px; border-radius:8px; display:none; }
+.mode-wrap { margin: 10px 0 6px; }
+.segs { display:inline-flex; gap:8px; padding:4px; background:#0f1626; border:1px solid #22304a; border-radius:12px; }
+.segs label { margin:0; padding:8px 12px; border-radius:10px; cursor:pointer; color:#EDEFF5; border:1px solid transparent; user-select:none; }
+.segs input { display:none; }
+.segs input:checked + span { background: var(--gold-grad); color:#05122b; font-weight:800; border-color:transparent; box-shadow: 0 2px 6px rgba(0,0,0,.35) inset; }
+</style>
 
-<ol>
-  <li>選擇你的 <b>基金資料庫.xlsx</b>（含：基金代碼、近1年%、近3年%、近5年%；若有 近3月%/近6月%/近2年% 也會一起更新）</li>
-  <li>按「開始抓取並更新」→ 呼叫批次 API 以代碼對應覆寫欄位</li>
-  <li>（可選）填入 <b>Apps Script Web App URL</b> 並勾選「自動上傳到雲端」，會以<b>原檔名</b>上傳覆蓋</li>
-</ol>
+<body>
+<h2>更新基金資料庫（依代碼覆寫 3m/6m/1Y/2Y/3Y/5Y）</h2>
 
-<!-- 批次 API Endpoint -->
-<label>批次 API Endpoint</label><br>
-<input id="ep" style="width:640px;padding:8px;border-radius:8px;border:1px solid #22304a;background:#0f1626;color:#e6edf7"
- value="https://momo-fund-worker.nms3194949.workers.dev/api/funds/batch"><br><br>
+<p>上傳現有 <b>基金資料庫.xlsx</b> → 自動抓取更新（覆寫同代碼基金）。<br>
+值寫入規則：若抓到的數值 <code>&gt;1</code> 視為百分比，寫入前會自動 <code>÷100</code>。</p>
 
-<!-- Apps Script Web App URL + 自動上傳 -->
-<label>Apps Script Web App URL（Drive 上傳端點）</label><br>
-<input id="uploadUrl" style="width:640px;padding:8px;border-radius:8px;border:1px solid #22304a;background:#0f1626;color:#e6edf7"
- placeholder="https://script.google.com/macros/s/AKfycbx6P7zOVtOsM6BUOb1WBbO455i1hUIns_qp65WWwzZ08ohlDsa9WPhxkAa99eseymua/exec，例如 https://script.google.com/macros/s/XXXX/exec"><br>
-<div style="margin:10px 0">
-  <input id="autoUpload" type="checkbox">
-  <label for="autoUpload">更新完成後自動上傳到 Google Drive（同名覆蓋）</label>
+<label>批次 API Endpoint</label>
+<input id="ep" style="width:600px;padding:8px"
+ value="https://momo-fund-worker.nms3194949.workers.dev/api/funds/batch">
+
+<label>Apps Script 上傳網址</label>
+<input id="uploadUrl" style="width:600px;padding:8px"
+ value="https://script.google.com/macros/s/AKfycbx6P7zOVtOsM6BUOb1WBbO455i1hUIns_qp65WWwzZ08ohlDsa9WPhxkAa99eseymua/exec">
+
+<div class="mode-wrap">
+  <label style="margin-bottom:6px">更新完成後的動作</label>
+  <div class="segs" id="modeSegs">
+    <label><input type="radio" name="afterMode" value="upload" id="mUpload" checked><span>自動上傳到雲端</span></label>
+    <label><input type="radio" name="afterMode" value="download" id="mDownload"><span>下載更新後 Excel</span></label>
+  </div>
 </div>
 
-<!-- 檔案選擇與操作 -->
-<input id="file" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
-<span id="info" style="color:#8aa0c8"></span>
-<br><br>
+<input id="file" type="file" accept=".xlsx,.xls">
+<span id="info" style="color:var(--muted)"></span><br><br>
 
-<button id="start" style="padding:10px 16px;border-radius:10px;border:1px solid #22304a;background:#5aa9ff;color:#05122b;font-weight:700">開始抓取並更新</button>
-<button id="download" style="padding:10px 16px;border-radius:10px;border:1px solid #22304a;background:#ffd65a;color:#05122b;font-weight:700;margin-left:8px" disabled>下載更新後 Excel</button>
-<span id="status" style="margin-left:8px;color:#8aa0c8"></span>
+<button id="start">開始抓取並更新</button>
+<span id="indicator">⚫</span>
+<span id="status" style="margin-left:10px;color:var(--muted)"></span>
 
-<pre id="out" style="white-space:pre-wrap;background:#111;color:#0f0;padding:12px;border-radius:8px;min-height:240px;margin-top:16px"></pre>
+<pre id="out"></pre>
+<div id="errorList"><b>⚠️ 錯誤清單：</b><br><div id="errItems"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
-/* ===== DOM ===== */
-const ep = document.getElementById('ep');
 const fileEl = document.getElementById('file');
 const infoEl = document.getElementById('info');
 const startBtn = document.getElementById('start');
-const dlBtn   = document.getElementById('download');
-const out     = document.getElementById('out');
-const statusEl= document.getElementById('status');
+const out = document.getElementById('out');
+const statusEl = document.getElementById('status');
+const indicator = document.getElementById('indicator');
+const errorBox = document.getElementById('errorList');
+const errItems = document.getElementById('errItems');
+const ep = document.getElementById('ep');
 const uploadUrlEl = document.getElementById('uploadUrl');
-const autoUploadEl = document.getElementById('autoUpload');
+const modeSegs = document.getElementById('modeSegs');
 
-let workbook = null;
-let targetSheetName = null;
+let workbook, targetSheetName;
 
-/* ===== 欄位別名（大小寫/全半形/空白皆忽略） ===== */
-const COL_HEADERS = {
-  code: ['基金代碼','代碼','code'],
+/* ========== 記住選項 ========== */
+const LS = { ep:'cfg_ep', upload:'cfg_upload', mode:'cfg_mode' };
+[[ep,LS.ep],[uploadUrlEl,LS.upload]].forEach(([el,key])=>{
+  const v = localStorage.getItem(key); if (v) el.value = v;
+  el.addEventListener('change',()=>localStorage.setItem(key, el.value||''));
+});
+modeSegs.addEventListener('change',()=>localStorage.setItem(LS.mode,getMode()));
+if (localStorage.getItem(LS.mode)==='download') document.getElementById('mDownload').checked=true;
 
-  // 主要三欄（至少要存在）
-  y1:   ['近1年%','近一年%','1年%','一年%','1y','1Y','近1年％'],
-  y3:   ['近3年%','近三年%','3年%','三年%','3y','3Y','近3年％','近3年累積%','近三年累積%'],
-  y5:   ['近5年%','近五年%','5年%','五年%','5y','5Y','近5年％','近5年累積%','近五年累積%'],
-
-  // 可選欄，有就更新
-  m3:   ['近3月%','三個月%','3月%','近三個月%','3m','3M','近3月％'],
-  m6:   ['近6月%','六個月%','6月%','近六個月%','6m','6M','近6月％'],
-  y2:   ['近2年%','二年%','2年%','近兩年%','2y','2Y','近2年％']
-};
-
-function norm(s){ return String(s||'').replace(/\s+/g,'').replace(/％/g,'%').trim().toLowerCase(); }
-function findHeaderIndex(headers, aliases){
-  const set = new Set(aliases.map(norm));
-  for (let i=0;i<headers.length;i++){
-    if (set.has(norm(headers[i]))) return i;
-  }
-  return -1;
-}
-
-/* ===== 檔案載入 ===== */
 fileEl.addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   infoEl.textContent = `已選擇：${f.name}（${(f.size/1024).toFixed(1)} KB）`;
-
   const data = await f.arrayBuffer();
   workbook = XLSX.read(data, { type: 'array' });
   targetSheetName = workbook.SheetNames[0];
-  status('已載入工作簿：' + targetSheetName);
-  dlBtn.disabled = true;
-  out.textContent = '';
 });
 
-/* ===== 主流程 ===== */
-startBtn.onclick = async () => {
-  if (!workbook) {
-    alert('請先選擇 Excel 檔（基金資料庫.xlsx）');
-    return;
+function getMode(){ return (document.querySelector('input[name="afterMode"]:checked')?.value)||'upload'; }
+
+/* ========== 表頭偵測：彈性別名 + 多列掃描 ========== */
+const COL_HEADERS = {
+  code: ['基金代碼','代碼','code'],
+  y1:   ['近1年%','近一年%','1年%','一年%','1y','1Y','近1年％'],
+  y3:   ['近3年%','近三年%','3年%','三年%','3y','3Y','近3年％','近3年累積%','近三年累積%'],
+  y5:   ['近5年%','近五年%','5年%','五年%','5y','5Y','近5年％','近5年累積%','近五年累積%'],
+  m3:   ['近3月%','三個月%','3月%','近三個月%','3m','3M','近3月％'],
+  m6:   ['近6月%','六個月%','6月%','近六個月%','6m','6M','近6月％'],
+  y2:   ['近2年%','二年%','2年%','近兩年%','2y','2Y','近2年％']
+};
+const NORM = s => String(s||'').replace(/\s+/g,'').replace(/％/g,'%').toLowerCase();
+function findHeaderIndex(headers, aliases){
+  const set = new Set(aliases.map(NORM));
+  for (let i=0;i<headers.length;i++) if (set.has(NORM(headers[i]))) return i;
+  return -1;
+}
+function detectHeaderRow(aoa, maxScan=15){
+  for (let r=0; r<Math.min(maxScan, aoa.length); r++){
+    const row = aoa[r] || [];
+    const code = findHeaderIndex(row, COL_HEADERS.code);
+    const y1   = findHeaderIndex(row, COL_HEADERS.y1);
+    const y3   = findHeaderIndex(row, COL_HEADERS.y3);
+    const y5   = findHeaderIndex(row, COL_HEADERS.y5);
+    if (code>=0 && (y1>=0 || y3>=0 || y5>=0)) {
+      return { r, map:{ code, y1, y3, y5,
+        m3: findHeaderIndex(row, COL_HEADERS.m3),
+        m6: findHeaderIndex(row, COL_HEADERS.m6),
+        y2: findHeaderIndex(row, COL_HEADERS.y2)
+      }, headers: row };
+    }
   }
+  return null;
+}
+
+/* ========== 主流程 ========== */
+startBtn.onclick = async () => {
+  if (!workbook) { alert('請先選擇檔案'); return; }
+  indicator.textContent = '🟡';
+  statusEl.textContent = '執行中...';
+  errorBox.style.display = 'none';
+  errItems.innerHTML = '';
   try {
-    status('解析表格中…');
-    const ws = workbook.Sheets[targetSheetName];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: true, defval: '' });
+    const ws  = workbook.Sheets[targetSheetName];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     if (!aoa.length) throw new Error('表格為空');
 
-    // 找表頭列
-    let headerRowIdx = -1, headers = null;
-    for (let r=0; r<Math.min(10, aoa.length); r++){
-      const row = aoa[r];
-      if (findHeaderIndex(row, COL_HEADERS.code) >= 0) { headerRowIdx = r; headers = row; break; }
+    // 1) 自動偵測表頭列
+    const hdr = detectHeaderRow(aoa);
+    if (!hdr) throw new Error('找不到表頭（需含「基金代碼」且至少有 近1年%/近3年%/近5年% 任一欄）');
+    const headerRow = hdr.r;
+    const idx = hdr.map;
+    statusEl.textContent = `已定位表頭列：第 ${headerRow+1} 列`;
+
+    if (idx.y1<0 || idx.y3<0 || idx.y5<0) {
+      // 三欄任缺也允許，但提醒
+      console.warn('提醒：三個年度欄位有缺，將只覆寫找得到的欄位', idx);
     }
-    if (headerRowIdx < 0) throw new Error('找不到表頭（需包含「基金代碼」欄位）');
 
-    // 各欄位索引（y1/y3/y5 必須存在；m3/m6/y2 可選）
-    const idx = {
-      code: findHeaderIndex(headers, COL_HEADERS.code),
-      y1:   findHeaderIndex(headers, COL_HEADERS.y1),
-      y3:   findHeaderIndex(headers, COL_HEADERS.y3),
-      y5:   findHeaderIndex(headers, COL_HEADERS.y5),
-      m3:   findHeaderIndex(headers, COL_HEADERS.m3),
-      m6:   findHeaderIndex(headers, COL_HEADERS.m6),
-      y2:   findHeaderIndex(headers, COL_HEADERS.y2),
-    };
-    if (idx.code < 0) throw new Error('找不到「基金代碼」欄位');
-    if (idx.y1 < 0 || idx.y3 < 0 || idx.y5 < 0)
-      throw new Error('找不到「近1年% / 近3年% / 近5年%」其中一個欄位，請確認表頭文字');
-
-    // 組 payload
+    // 2) 建立 funds 清單 + row map
     const funds = [];
-    const rowMapByCode = new Map(); // code -> rowIndex
-    const nameByCode = new Map();   // code -> name（假設首欄為名稱）
-    for (let r = headerRowIdx + 1; r < aoa.length; r++) {
-      const row = aoa[r];
-      const code = String(row[idx.code] || '').trim();
+    const rowMap = new Map();
+    for (let r=headerRow+1; r<aoa.length; r++){
+      const code = String(aoa[r]?.[idx.code] || '').trim();
       if (!code) continue;
-      rowMapByCode.set(code, r);
-      const nameGuess = (row[0] != null) ? String(row[0]).trim() : '';
-      nameByCode.set(code, nameGuess);
-      funds.push({ name: nameGuess || code, code });
+      const name = String(aoa[r]?.[0] || '').trim();
+      funds.push({ name: name || code, code });
+      rowMap.set(code, r);
     }
     if (!funds.length) throw new Error('資料列中沒有任何基金代碼');
 
-    // 呼叫批次 API
-    status(`呼叫批次 API 中…（共 ${funds.length} 檔）`);
+    // 3) 呼叫批次 API
     const resp = await fetch(ep.value.trim(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ funds })
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(`批次 API 失敗（HTTP ${resp.status}）：${data?.error || resp.statusText}`);
+    if (!resp.ok) throw new Error('批次 API 失敗：HTTP ' + resp.status);
 
-    // code -> item
+    // 4) 轉成 code -> item
     const byCode = new Map();
-    for (const item of (Array.isArray(data) ? data : [])) {
-      const code = (()=>{
-        try { return new URL(item.source).searchParams.get('a') } catch { return '' }
-      })();
-      if (code) byCode.set(code, item);
+    for (const it of (Array.isArray(data)?data:[])) {
+      let code = '';
+      try { code = new URL(it.source).searchParams.get('a') || ''; } catch {}
+      if (code) byCode.set(code, it);
     }
 
-    // 寫回：所有值若 >1 一律 ÷100（比例），套用 0.0000 格式
-    let updated = 0, missing = 0;
-    const missingList = [];
-    for (const [code, rowIdx] of rowMapByCode.entries()) {
-      const got = byCode.get(code);
-      if (!got || !got.returns) { 
-        missing++; 
-        missingList.push({ code, name: nameByCode.get(code) || '' });
-        continue; 
-      }
-      const writeMaybe = (colIndex, rawVal) => {
-        if (colIndex < 0) return;
-        const frac = toFraction(rawVal);
-        if (frac != null) setCell(aoa, rowIdx, colIndex, frac);
-      };
-      writeMaybe(idx.m3, got.returns['3m']);
-      writeMaybe(idx.m6, got.returns['6m']);
-      writeMaybe(idx.y1, got.returns['1y']);
-      writeMaybe(idx.y2, got.returns['2y']);
-      writeMaybe(idx.y3, got.returns['3y']);
-      writeMaybe(idx.y5, got.returns['5y']);
+    // 5) 寫回（>1 視為百分比 → ÷100）
+    const conv = v => (v==null||v==='') ? null : (Number(v)>1 ? Number(v)/100 : Number(v));
+    let updated=0, missingList=[];
+    for (const [code, rowIdx] of rowMap.entries()){
+      const it = byCode.get(code);
+      if (!it || !it.returns){ missingList.push(`${aoa[rowIdx][0]||''}（${code}）`); continue; }
+      const W = (c,val)=>{ if (c>=0 && val!=null && Number.isFinite(Number(val))) aoa[rowIdx][c]=conv(val); };
+
+      W(idx.m3, it.returns['3m']);
+      W(idx.m6, it.returns['6m']);
+      W(idx.y1, it.returns['1y']);
+      W(idx.y2, it.returns['2y']);
+      W(idx.y3, it.returns['3y']);
+      W(idx.y5, it.returns['5y']);
       updated++;
     }
 
-    // 回寫 + 數字格式
-    const newWS = XLSX.utils.aoa_to_sheet(aoa, { cellDates: false });
-    const percentCols = [idx.m3, idx.m6, idx.y1, idx.y2, idx.y3, idx.y5].filter(i => i >= 0);
-    applyNumberFormat(newWS, headerRowIdx+1, aoa.length-1, percentCols, "0.0000");
-    workbook.Sheets[targetSheetName] = newWS;
+    // 6) 回寫工作表
+    workbook.Sheets[targetSheetName] = XLSX.utils.aoa_to_sheet(aoa);
 
-    // 摘要 + 錯誤清單
-    out.textContent = JSON.stringify(data, null, 2);
-    if (missingList.length > 0) {
-      const lines = missingList.map(x => `- ${x.name ? x.name + '（' + x.code + '）' : x.code}`).join('\n');
-      out.textContent += `\n\n⚠️ 無資料或錯誤基金（共 ${missingList.length} 筆）：\n${lines}`;
-    }
-    status(`完成：更新 ${updated} 筆；${missing ? (missing + ' 筆無資料或錯誤') : '全數成功'}`);
-    dlBtn.disabled = false;
+    // 顯示摘要 & 錯誤清單
+    out.textContent = JSON.stringify((Array.isArray(data)?data.slice(0,5):data), null, 2) + '\n...';
+    if (missingList.length){ errorBox.style.display='block'; errItems.innerHTML = missingList.map(x=>`• ${x}`).join('<br>'); }
 
-    // 下載（原檔名）
+    // 7) 後續動作（上傳／下載）
     const originalName = fileEl.files[0]?.name || '基金資料庫.xlsx';
-    XLSX.writeFile(workbook, originalName);
+    const mode = getMode();
 
-    // 自動上傳（GAS Web App；以原檔名覆蓋）
-    if (autoUploadEl.checked) {
-      status('上傳到 Google Drive 中…');
-      try {
-        const r = await uploadToGAS(originalName, workbook);
-        status(`完成：已上傳到雲端（${r.name}；fileId=${r.id}）`);
-      } catch (err) {
-        status('雲端上傳失敗：' + err.message, true);
-      }
+    if (mode === 'upload') {
+      statusEl.textContent = `已更新 ${updated} 筆，準備上傳…`;
+      const payload = {
+        filename: originalName,
+        contentBase64: workbookToBase64(workbook),
+        mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      };
+      const upResp = await fetch(uploadUrlEl.value.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload)
+      });
+      const txt = await upResp.text();
+      if (!upResp.ok) throw new Error('上傳失敗：HTTP '+upResp.status+'；'+txt);
+      indicator.textContent = '🟢';
+      statusEl.textContent = `完成：更新 ${updated} 筆；${missingList.length ? '有 '+missingList.length+' 筆錯誤' : '全數成功'}；已上傳雲端`;
+    } else {
+      XLSX.writeFile(workbook, originalName);
+      indicator.textContent = '🟢';
+      statusEl.textContent = `完成：更新 ${updated} 筆；${missingList.length ? '有 '+missingList.length+' 筆錯誤' : '全數成功'}；已下載 Excel`;
     }
   } catch (e) {
-    status('錯誤：' + e.message, true);
+    indicator.textContent = '🔴';
+    statusEl.textContent = '錯誤：' + e.message;
     console.error(e);
   }
 };
 
-dlBtn.onclick = () => {
-  if (!workbook) return;
-  const originalName = fileEl.files[0]?.name || '基金資料庫.xlsx';
-  XLSX.writeFile(workbook, originalName);
-};
-
-/* ===== 上傳到 GAS（使用 text/plain 避免 CORS 預檢） ===== */
-function workbookToBase64(wb) {
+function workbookToBase64(wb){
   const ab = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  let binary = ''; const bytes = new Uint8Array(ab);
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  let binary = '', bytes = new Uint8Array(ab);
+  for (let i=0;i<bytes.byteLength;i++) binary+=String.fromCharCode(bytes[i]);
   return btoa(binary);
-}
-async function uploadToGAS(filename, wb) {
-  const url = (uploadUrlEl.value || '').trim();
-  if (!url) throw new Error('請先填入 Apps Script Web App URL');
-
-  const payload = {
-    filename,
-    contentBase64: workbookToBase64(wb),
-    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    // 若在 GAS 端開了簡單 token 驗證，這裡帶上：token: 'YOUR_TOKEN'
-  };
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' }, // 關鍵：避免預檢
-    body: JSON.stringify(payload)
-  });
-  const txt = await resp.text();
-  let data = {};
-  try { data = JSON.parse(txt); } catch {}
-  if (!resp.ok || data.ok !== true) {
-    throw new Error(data.error || (resp.status + ' ' + resp.statusText));
-  }
-  return data; // { ok:true, id, name }
-}
-
-/* ===== 小工具 ===== */
-function status(msg, isErr=false){
-  statusEl.textContent = msg;
-  statusEl.style.color = isErr ? '#ff5252' : '#8aa0c8';
-}
-function toFraction(v){
-  if (v===null || v===undefined || v==='') return null;
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return (n > 1) ? (n/100) : n; // >1 視為百分比，先 ÷100
-}
-function setCell(aoa, r, c, val){
-  if (!aoa[r]) aoa[r] = [];
-  aoa[r][c] = val;
-}
-function applyNumberFormat(ws, rStart, rEnd, colIdxArr, fmt){
-  for (let r=rStart; r<=rEnd; r++){
-    for (const c of colIdxArr){
-      const addr = XLSX.utils.encode_cell({r, c});
-      const cell = ws[addr];
-      if (cell && typeof cell.v === 'number'){
-        cell.t = 'n';
-        cell.z = fmt;
-      }
-    }
-  }
 }
 </script>
 </body>
