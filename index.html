@@ -2,6 +2,7 @@
 <html lang="zh-Hant">
 <meta charset="utf-8">
 <title>更新基金資料庫（依代碼覆寫）</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>
 :root {
   --deep: #0A1221;
@@ -11,10 +12,12 @@
   --error-bg: #401A1A;
   --error-text: #FFDADA;
 }
+*{box-sizing:border-box}
 body { background: var(--deep); color: #EDEFF5; font-family: system-ui, "Noto Sans TC", sans-serif; padding: 24px; line-height: 1.6; }
 h2 { font-size: 26px; font-weight: 800; background: var(--gold-grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; }
 label { display:block; margin-top:12px; font-weight:600; color:var(--muted); }
 input, button, textarea { border-radius: 10px; border: 1px solid #22304a; background: #0f1626; color: #EDEFF5; }
+input, textarea { padding: 8px; }
 button { padding: 10px 18px; font-weight: 700; border: none; background: var(--gold-grad); color: #05122b; cursor: pointer; transition: 0.3s; box-shadow: 0 3px 6px rgba(0,0,0,.3); }
 button:hover { filter: brightness(1.1); transform: translateY(-1px); } button:active { transform: translateY(0); }
 #indicator { display:inline-block; margin-left:10px; font-size:20px; vertical-align:middle; }
@@ -25,20 +28,23 @@ pre { white-space: pre-wrap; background:#111827; padding:12px; border-radius:8px
 .segs label { margin:0; padding:8px 12px; border-radius:10px; cursor:pointer; color:#EDEFF5; border:1px solid transparent; user-select:none; }
 .segs input { display:none; }
 .segs input:checked + span { background: var(--gold-grad); color:#05122b; font-weight:800; border-color:transparent; box-shadow: 0 2px 6px rgba(0,0,0,.35) inset; }
+.small { color: var(--muted); font-size: 12px; }
+.row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 </style>
 
 <body>
-<h2>更新基金資料庫（依代碼覆寫 3m/6m/1Y/2Y/3Y/5Y）</h2>
+<h2>更新基金資料庫（依代碼覆寫 3m/6m/1Y/2Y/3Y/5Y + 風險指標）</h2>
 
 <p>上傳現有 <b>基金資料庫.xlsx</b> → 自動抓取更新（覆寫同代碼基金）。<br>
-值寫入規則：若抓到的數值 <code>&gt;1</code> 視為百分比，寫入前會自動 <code>÷100</code>。</p>
+值寫入規則：若抓到的數值 <code>&gt;1</code> 視為百分比，寫入前會自動 <code>÷100</code>（統一為比例 0~1）。<br>
+<span class="small">新增支援：<b>近3月%(網頁)</b>、<b>近6月%(網頁)</b>、<b>年化標準差%</b>、<b>Sharpe</b>、<b>Beta</b>。</span></p>
 
 <label>批次 API Endpoint</label>
-<input id="ep" style="width:600px;padding:8px"
+<input id="ep" style="width:800px"
  value="https://momo-fund-worker.nms3194949.workers.dev/api/funds/batch">
 
 <label>Apps Script 上傳網址</label>
-<input id="uploadUrl" style="width:600px;padding:8px"
+<input id="uploadUrl" style="width:800px"
  value="https://script.google.com/macros/s/AKfycbx6P7zOVtOsM6BUOb1WBbO455i1hUIns_qp65WWwzZ08ohlDsa9WPhxkAa99eseymua/exec">
 
 <div class="mode-wrap">
@@ -49,8 +55,11 @@ pre { white-space: pre-wrap; background:#111827; padding:12px; border-radius:8px
   </div>
 </div>
 
-<input id="file" type="file" accept=".xlsx,.xls">
-<span id="info" style="color:var(--muted)"></span><br><br>
+<div class="row">
+  <input id="file" type="file" accept=".xlsx,.xls">
+  <span id="info" style="color:var(--muted)"></span>
+</div>
+<br>
 
 <button id="start">開始抓取並更新</button>
 <span id="indicator">⚫</span>
@@ -103,14 +112,38 @@ const COL_HEADERS = {
   y5:   ['近5年%','近五年%','5年%','五年%','5y','5Y','近5年％','近5年累積%','近五年累積%'],
   m3:   ['近3月%','三個月%','3月%','近三個月%','3m','3M','近3月％'],
   m6:   ['近6月%','六個月%','6月%','近六個月%','6m','6M','近6月％'],
-  y2:   ['近2年%','二年%','2年%','近兩年%','2y','2Y','近2年％']
+  y2:   ['近2年%','二年%','2年%','近兩年%','2y','2Y','近2年％'],
+
+  // 新增：網頁 3m/6m + 風險指標（含括號變體）
+  m3w:  ['近3月%(網頁)','3m(web)','3m_web','3m(網頁)','3m(網站)'],
+  m6w:  ['近6月%(網頁)','6m(web)','6m_web','6m(網頁)','6m(網站)'],
+  std:  ['年化標準差%','年化標準差(%)','stdev%','stddev%','stddev_annual%','annualized stdev%'],
+  sharpe:['Sharpe','夏普值','夏普'],
+  beta: ['Beta','貝他','β']
 };
-const NORM = s => String(s||'').replace(/\s+/g,'').replace(/％/g,'%').toLowerCase();
+// 更強化的標頭正規化：去空白、全形％→半形%、去括號與逗號
+const NORM = s => String(s||'')
+  .replace(/\s+/g,'')
+  .replace(/％/g,'%')
+  .replace(/[()（）,，]/g,'')
+  .toLowerCase();
+
+// 先嚴格比對；若 miss，再用「包含式」備援（避免微差字樣、括號等）
 function findHeaderIndex(headers, aliases){
-  const set = new Set(aliases.map(NORM));
-  for (let i=0;i<headers.length;i++) if (set.has(NORM(headers[i]))) return i;
+  const normAliases = aliases.map(NORM);
+  // 1) 精確命中
+  for (let i=0;i<headers.length;i++){
+    const h = NORM(headers[i]);
+    if (normAliases.includes(h)) return i;
+  }
+  // 2) 包含式（例如「年化 標準差(%)」包含「年化標準差%」）
+  for (let i=0;i<headers.length;i++){
+    const h = NORM(headers[i]);
+    if (normAliases.some(a => h.includes(a))) return i;
+  }
   return -1;
 }
+
 function detectHeaderRow(aoa, maxScan=15){
   for (let r=0; r<Math.min(maxScan, aoa.length); r++){
     const row = aoa[r] || [];
@@ -119,14 +152,40 @@ function detectHeaderRow(aoa, maxScan=15){
     const y3   = findHeaderIndex(row, COL_HEADERS.y3);
     const y5   = findHeaderIndex(row, COL_HEADERS.y5);
     if (code>=0 && (y1>=0 || y3>=0 || y5>=0)) {
-      return { r, map:{ code, y1, y3, y5,
+      const map = {
+        code, y1, y3, y5,
         m3: findHeaderIndex(row, COL_HEADERS.m3),
         m6: findHeaderIndex(row, COL_HEADERS.m6),
-        y2: findHeaderIndex(row, COL_HEADERS.y2)
-      }, headers: row };
+        y2: findHeaderIndex(row, COL_HEADERS.y2),
+        m3w:findHeaderIndex(row, COL_HEADERS.m3w),
+        m6w:findHeaderIndex(row, COL_HEADERS.m6w),
+        std:findHeaderIndex(row, COL_HEADERS.std),
+        sharpe:findHeaderIndex(row, COL_HEADERS.sharpe),
+        beta:findHeaderIndex(row, COL_HEADERS.beta)
+      };
+      return { r, map, headers: row };
     }
   }
   return null;
+}
+
+/* ========== 百分比/比例轉換 ========== */
+function toRatio(val){
+  if (val==null || val==='') return null;
+  if (typeof val === 'string'){
+    const s = val.trim().replace(/％/g,'%').replace(/,/g,'');
+    if (!s) return null;
+    if (/%$/.test(s)) {
+      const num = parseFloat(s.replace('%',''));
+      return Number.isFinite(num) ? num/100 : null;
+    }
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return n>1 ? n/100 : n;
+  }
+  const n = Number(val);
+  if (!Number.isFinite(n)) return null;
+  return n>1 ? n/100 : n;
 }
 
 /* ========== 主流程 ========== */
@@ -148,10 +207,10 @@ startBtn.onclick = async () => {
     const idx = hdr.map;
     statusEl.textContent = `已定位表頭列：第 ${headerRow+1} 列`;
 
-    if (idx.y1<0 || idx.y3<0 || idx.y5<0) {
-      // 三欄任缺也允許，但提醒
-      console.warn('提醒：三個年度欄位有缺，將只覆寫找得到的欄位', idx);
-    }
+    // debug：顯示欄位對應（方便確認是否有命中年化標準差）
+    out.textContent =
+      '[Header map] ' + JSON.stringify(idx) + '\n' +
+      '[Headers] ' + JSON.stringify(aoa[headerRow]) + '\n';
 
     // 2) 建立 funds 清單 + row map
     const funds = [];
@@ -174,28 +233,58 @@ startBtn.onclick = async () => {
     const data = await resp.json();
     if (!resp.ok) throw new Error('批次 API 失敗：HTTP ' + resp.status);
 
-    // 4) 轉成 code -> item
+    // 4) 轉成 code -> item（支援 webReturns 與 risk）
     const byCode = new Map();
     for (const it of (Array.isArray(data)?data:[])) {
       let code = '';
       try { code = new URL(it.source).searchParams.get('a') || ''; } catch {}
-      if (code) byCode.set(code, it);
+      if (!code) continue;
+      const entry = {
+        returns: it.returns || {},
+        web3m: (it.webReturns && it.webReturns['3m']) ?? it.web3m,
+        web6m: (it.webReturns && it.webReturns['6m']) ?? it.web6m,
+        std: (it.risk && (it.risk.stddev_annual ?? it.risk.stddevAnnual))
+             ?? it.stddev_annual ?? it.stddevAnnual,
+        sharpe: (it.risk && it.risk.sharpe) ?? it.sharpe,
+        beta: (it.risk && it.risk.beta) ?? it.beta
+      };
+      byCode.set(code, entry);
     }
 
-    // 5) 寫回（>1 視為百分比 → ÷100）
-    const conv = v => (v==null||v==='') ? null : (Number(v)>1 ? Number(v)/100 : Number(v));
+    // 5) 寫回（>1 視為百分比 → ÷100；Sharpe/Beta 直接數字）
+    const W = (row, col, val, isRatio=true)=>{
+      if (col<0 || val==null || val==='') return false;
+      const v = isRatio ? toRatio(val) : Number(val);
+      if (v==null || !Number.isFinite(v)) return false;
+      aoa[row][col] = v;
+      return true;
+    };
+
     let updated=0, missingList=[];
     for (const [code, rowIdx] of rowMap.entries()){
       const it = byCode.get(code);
-      if (!it || !it.returns){ missingList.push(`${aoa[rowIdx][0]||''}（${code}）`); continue; }
-      const W = (c,val)=>{ if (c>=0 && val!=null && Number.isFinite(Number(val))) aoa[rowIdx][c]=conv(val); };
+      if (!it || (!it.returns && !it.web3m && !it.std && it.sharpe==null && it.beta==null)) {
+        missingList.push(`${aoa[rowIdx][0]||''}（${code}）`); continue;
+      }
 
-      W(idx.m3, it.returns['3m']);
-      W(idx.m6, it.returns['6m']);
-      W(idx.y1, it.returns['1y']);
-      W(idx.y2, it.returns['2y']);
-      W(idx.y3, it.returns['3y']);
-      W(idx.y5, it.returns['5y']);
+      // 既有區間
+      if (it.returns){
+        W(rowIdx, idx.m3, it.returns['3m']);
+        W(rowIdx, idx.m6, it.returns['6m']);
+        W(rowIdx, idx.y1, it.returns['1y']);
+        W(rowIdx, idx.y2, it.returns['2y']);
+        W(rowIdx, idx.y3, it.returns['3y']);
+        W(rowIdx, idx.y5, it.returns['5y']);
+      }
+      // 網頁 3m/6m
+      if (idx.m3w >= 0) W(rowIdx, idx.m3w, it.web3m);
+      if (idx.m6w >= 0) W(rowIdx, idx.m6w, it.web6m);
+
+      // 風險指標
+      if (idx.std    >= 0) W(rowIdx, idx.std,    it.std);           // ％→比例
+      if (idx.sharpe >= 0 && it.sharpe!=null) W(rowIdx, idx.sharpe, it.sharpe, false);
+      if (idx.beta   >= 0 && it.beta!=null)   W(rowIdx, idx.beta,   it.beta,   false);
+
       updated++;
     }
 
@@ -203,7 +292,8 @@ startBtn.onclick = async () => {
     workbook.Sheets[targetSheetName] = XLSX.utils.aoa_to_sheet(aoa);
 
     // 顯示摘要 & 錯誤清單
-    out.textContent = JSON.stringify((Array.isArray(data)?data.slice(0,5):data), null, 2) + '\n...';
+    out.textContent += '\n[Sample API data]\n' +
+      JSON.stringify((Array.isArray(data)?data.slice(0,3):data), null, 2) + '\n...';
     if (missingList.length){ errorBox.style.display='block'; errItems.innerHTML = missingList.map(x=>`• ${x}`).join('<br>'); }
 
     // 7) 後續動作（上傳／下載）
