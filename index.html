@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hant">
 <meta charset="utf-8">
-<title>更新基金資料庫（依代碼覆寫）</title>
+<title>更新基金資料庫</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>
 :root {
@@ -36,8 +36,8 @@ pre { white-space: pre-wrap; background:#111827; padding:12px; border-radius:8px
 <h2>更新基金資料庫（依代碼覆寫 3m/6m/1Y/2Y/3Y/5Y + 風險指標）</h2>
 
 <p>上傳現有 <b>基金資料庫.xlsx</b> → 自動抓取更新（覆寫同代碼基金）。<br>
-值寫入規則：若抓到的數值 <code>&gt;1</code> 視為百分比，寫入前會自動 <code>÷100</code>（統一為比例 0~1）。<br>
-<span class="small">新增支援：<b>近3月%(網頁)</b>、<b>近6月%(網頁)</b>、<b>年化標準差%</b>、<b>Sharpe</b>、<b>Beta</b>。</span></p>
+值寫入規則：<b>所有報酬與「年化標準差%」不做任何運算，僅將抓取值直接加上「%」字串</b>；若原值已含 %（全形％或半形% 皆可），則維持不變。<br>
+<span class="small">維持：<b>Sharpe</b>、<b>Beta</b> 以純數字寫入（不加 %）。同時支援 <b>近3月%(網頁)</b>、<b>近6月%(網頁)</b> 欄位。</span></p>
 
 <label>批次 API Endpoint</label>
 <input id="ep" style="width:800px"
@@ -169,23 +169,13 @@ function detectHeaderRow(aoa, maxScan=15){
   return null;
 }
 
-/* ========== 百分比/比例轉換 ========== */
-function toRatio(val){
-  if (val==null || val==='') return null;
-  if (typeof val === 'string'){
-    const s = val.trim().replace(/％/g,'%').replace(/,/g,'');
-    if (!s) return null;
-    if (/%$/.test(s)) {
-      const num = parseFloat(s.replace('%',''));
-      return Number.isFinite(num) ? num/100 : null;
-    }
-    const n = Number(s);
-    if (!Number.isFinite(n)) return null;
-    return n>1 ? n/100 : n;
-  }
-  const n = Number(val);
-  if (!Number.isFinite(n)) return null;
-  return n>1 ? n/100 : n;
+/* ========== 百分比格式化：不運算，僅直接加 %；已含 % 維持 ========== */
+function toPercentString(val){
+  if (val == null || val === '') return '';
+  // 正規化：全形％→%，去掉尾端多餘空白與既有的%
+  let s = String(val).trim().replace(/％/g,'%');
+  s = s.replace(/\s*%\s*$/,''); // 若原本就有 %，先移除避免重複
+  return s + '%';
 }
 
 /* ========== 主流程 ========== */
@@ -207,7 +197,7 @@ startBtn.onclick = async () => {
     const idx = hdr.map;
     statusEl.textContent = `已定位表頭列：第 ${headerRow+1} 列`;
 
-    // debug：顯示欄位對應（方便確認是否有命中年化標準差）
+    // debug：顯示欄位對應
     out.textContent =
       '[Header map] ' + JSON.stringify(idx) + '\n' +
       '[Headers] ' + JSON.stringify(aoa[headerRow]) + '\n';
@@ -251,12 +241,10 @@ startBtn.onclick = async () => {
       byCode.set(code, entry);
     }
 
-    // 5) 寫回（>1 視為百分比 → ÷100；Sharpe/Beta 直接數字）
-    const W = (row, col, val, isRatio=true)=>{
-      if (col<0 || val==null || val==='') return false;
-      const v = isRatio ? toRatio(val) : Number(val);
-      if (v==null || !Number.isFinite(v)) return false;
-      aoa[row][col] = v;
+    // 5) 寫回（報酬/年化標準差 → 直接加 %；Sharpe/Beta 直接數字）
+    const W = (row, col, val, addPercent = true) => {
+      if (col < 0 || val == null || val === '') return false;
+      aoa[row][col] = addPercent ? toPercentString(val) : val;
       return true;
     };
 
@@ -267,7 +255,7 @@ startBtn.onclick = async () => {
         missingList.push(`${aoa[rowIdx][0]||''}（${code}）`); continue;
       }
 
-      // 既有區間
+      // 既有區間（全部 → 直接加 %）
       if (it.returns){
         W(rowIdx, idx.m3, it.returns['3m']);
         W(rowIdx, idx.m6, it.returns['6m']);
@@ -276,12 +264,12 @@ startBtn.onclick = async () => {
         W(rowIdx, idx.y3, it.returns['3y']);
         W(rowIdx, idx.y5, it.returns['5y']);
       }
-      // 網頁 3m/6m
+      // 網頁 3m/6m（直接加 %）
       if (idx.m3w >= 0) W(rowIdx, idx.m3w, it.web3m);
       if (idx.m6w >= 0) W(rowIdx, idx.m6w, it.web6m);
 
-      // 風險指標
-      if (idx.std    >= 0) W(rowIdx, idx.std,    it.std);           // ％→比例
+      // 風險指標：年化標準差 → 直接加 %；Sharpe/Beta → 數字
+      if (idx.std    >= 0) W(rowIdx, idx.std,    it.std);
       if (idx.sharpe >= 0 && it.sharpe!=null) W(rowIdx, idx.sharpe, it.sharpe, false);
       if (idx.beta   >= 0 && it.beta!=null)   W(rowIdx, idx.beta,   it.beta,   false);
 
